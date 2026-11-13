@@ -8,6 +8,11 @@
 
 > 截图取自演示环境：PLC 与扫码枪均为本机模拟服务，条码为示例数据。
 
+## 下载
+
+- 最新发布包：[Releases](https://github.com/YinFengLLL/SmartScanner/releases/latest) —— `SmartScanner-win-x64-20261113.zip`
+- 解压后直接运行 `SmartScanner.App.exe`（win-x64 单文件自包含，无需安装 .NET 运行时），同目录保留 `config.json`
+
 ## 功能
 
 - **扫码枪通讯**：TCP/IP CLIENT（扫码枪侧为 TCP Server）与串口（USB COM）双模式
