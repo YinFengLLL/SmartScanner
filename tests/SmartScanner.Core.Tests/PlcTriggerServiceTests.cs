@@ -15,6 +15,7 @@ public sealed class PlcTriggerServiceTests : IDisposable
 {
     private const ushort TriggerReg = 4000; // 与 ScannerConfig 默认一致
     private const ushort ResultReg = 4100;
+    private const ushort BarcodeReg = 4101;
 
     private readonly ModbusFactory _factory = new();
     private readonly IModbusTcpSlaveNetwork _network;
@@ -109,6 +110,60 @@ public sealed class PlcTriggerServiceTests : IDisposable
     }
 
     [Fact]
+    public void 扫码成功_条码内容按INT16写入单寄存器()
+    {
+        var config = NewConfig(_port, TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(10));
+        config.BarcodeRegister = BarcodeReg;
+        config.BarcodeWriteMode = BarcodeWriteMode.Int16;
+        using var modbus = ConnectPlc(config);
+        using var trigger = new PlcTriggerService(modbus, config);
+        using var plcSide = CreatePlcSideMaster();
+
+        var triggered = new ManualResetEventSlim();
+        trigger.TriggerReceived += () => triggered.Set();
+
+        trigger.Start();
+        plcSide.WriteSingleRegister(1, TriggerReg, 1);
+        Assert.True(triggered.Wait(TimeSpan.FromSeconds(5)), "未收到触发事件");
+
+        // 11 位补零条码 → 数值 100，写入 1 个寄存器
+        BarcodeWriteOutcome? outcome = trigger.HandleBarcode("00000000100");
+
+        Assert.True(outcome?.Success);
+        Assert.Equal(100, plcSide.ReadHoldingRegisters(1, BarcodeReg, 1)[0]);
+        Assert.Equal(1, plcSide.ReadHoldingRegisters(1, ResultReg, 1)[0]); // 条码先写、OK 后写
+
+        trigger.Stop();
+    }
+
+    [Fact]
+    public void 扫码成功_条码内容按INT32写入双寄存器且高字在前()
+    {
+        var config = NewConfig(_port, TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(10));
+        config.BarcodeRegister = BarcodeReg;
+        config.BarcodeWriteMode = BarcodeWriteMode.Int32;
+        using var modbus = ConnectPlc(config);
+        using var trigger = new PlcTriggerService(modbus, config);
+        using var plcSide = CreatePlcSideMaster();
+
+        var triggered = new ManualResetEventSlim();
+        trigger.TriggerReceived += () => triggered.Set();
+
+        trigger.Start();
+        plcSide.WriteSingleRegister(1, TriggerReg, 1);
+        Assert.True(triggered.Wait(TimeSpan.FromSeconds(5)), "未收到触发事件");
+
+        BarcodeWriteOutcome? outcome = trigger.HandleBarcode("0000123456"); // 123456 > 65535
+
+        Assert.True(outcome?.Success);
+        ushort[] registers = plcSide.ReadHoldingRegisters(1, BarcodeReg, 2);
+        Assert.Equal((ushort)(123456 >> 16), registers[0]);
+        Assert.Equal((ushort)(123456 & 0xFFFF), registers[1]);
+
+        trigger.Stop();
+    }
+
+    [Fact]
     public void 触发后超时未扫码_写结果2()
     {
         var config = NewConfig(_port, TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(300));
@@ -132,6 +187,41 @@ public sealed class PlcTriggerServiceTests : IDisposable
         Assert.Equal(2, plcSide.ReadHoldingRegisters(1, ResultReg, 1)[0]);
         Assert.False(trigger.IsWaiting);
 
+        trigger.Stop();
+    }
+
+    [Fact]
+    public void 启动前触发寄存器已是1_只清零不触发()
+    {
+        var config = NewConfig(_port, TimeSpan.FromMilliseconds(50), TimeSpan.FromMilliseconds(300));
+        using var modbus = ConnectPlc(config);
+        using var trigger = new PlcTriggerService(modbus, config);
+        using var plcSide = CreatePlcSideMaster();
+
+        int triggerCount = 0;
+        var triggered = new ManualResetEventSlim();
+        trigger.TriggerReceived += () =>
+        {
+            Interlocked.Increment(ref triggerCount);
+            triggered.Set();
+        };
+
+        // 上一轮遗留（或开机前已置位）的触发信号
+        plcSide.WriteSingleRegister(1, TriggerReg, 1);
+
+        Assert.True(trigger.ClearStaleTrigger(), "未识别出残留触发信号");
+        trigger.Start();
+
+        // 开始监听后不得直接扫码，只清零应答
+        Thread.Sleep(400);
+        Assert.False(triggered.IsSet, "开始监听时直接触发了一次扫码");
+        Assert.Equal(0, plcSide.ReadHoldingRegisters(1, TriggerReg, 1)[0]);
+        Assert.Equal(0, plcSide.ReadHoldingRegisters(1, ResultReg, 1)[0]); // 没有进入等待/超时写结果
+
+        // PLC 重新给出触发 → 正常扫码流程
+        plcSide.WriteSingleRegister(1, TriggerReg, 1);
+        Assert.True(triggered.Wait(TimeSpan.FromSeconds(5)), "新触发未被响应");
+        Assert.Equal(1, triggerCount);
         trigger.Stop();
     }
 

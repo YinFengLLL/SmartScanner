@@ -30,11 +30,13 @@ public sealed class TcpScannerServiceTests : IDisposable
         _listener.Stop();
     }
 
-    private ScannerConfig NewConfig() => new()
+    private ScannerConfig NewConfig(ScannerFrameMode mode = ScannerFrameMode.Auto, bool trimAffixes = true) => new()
     {
         TransportMode = ScannerTransportMode.Tcp,
         ScannerIp = "127.0.0.1",
         ScannerPort = _port,
+        FrameMode = mode,
+        TrimFrameAffixes = trimAffixes,
     };
 
     /// <summary>异步接受服务端连接（模拟扫码枪 TCP Server 侧），带超时</summary>
@@ -78,6 +80,150 @@ public sealed class TcpScannerServiceTests : IDisposable
 
         Assert.True(evt.Wait(TimeSpan.FromSeconds(5)), "未收到条码");
         Assert.Equal("ABC123", received);
+        service.Close();
+    }
+
+    [Fact]
+    public async Task 无前缀无后缀条码_静默后也能识别()
+    {
+        using var service = new TcpScannerService();
+        var acceptTask = AcceptServerSideAsync();
+        service.Open(NewConfig());
+        await acceptTask;
+
+        string? received = null;
+        string? raw = null;
+        var evt = new ManualResetEventSlim();
+        service.RawDataReceived += r => raw = r;
+        service.BarcodeReceived += b =>
+        {
+            received = b;
+            evt.Set();
+        };
+
+        // 现场扫码枪返回信息不带前缀和后缀（无 CR/LF）
+        byte[] data = Encoding.ASCII.GetBytes("6901234567890");
+        var stream = _serverSide!.GetStream();
+        stream.Write(data, 0, data.Length);
+
+        Assert.True(evt.Wait(TimeSpan.FromSeconds(3)), "无结尾符条码未被识别（帧无法切分）");
+        Assert.Equal("6901234567890", received);
+        Assert.Equal("6901234567890", raw);
+        service.Close();
+    }
+
+    [Fact]
+    public async Task STX_ETX包裹且无CRLF_也能识别()
+    {
+        using var service = new TcpScannerService();
+        var acceptTask = AcceptServerSideAsync();
+        service.Open(NewConfig());
+        await acceptTask;
+
+        string? received = null;
+        var evt = new ManualResetEventSlim();
+        service.BarcodeReceived += b =>
+        {
+            received = b;
+            evt.Set();
+        };
+
+        byte[] payload = Encoding.ASCII.GetBytes("ABC123");
+        byte[] data = [0x02, .. payload, 0x03];
+        var stream = _serverSide!.GetStream();
+        stream.Write(data, 0, data.Length);
+
+        Assert.True(evt.Wait(TimeSpan.FromSeconds(3)), "STX/ETX 包裹条码未被识别");
+        Assert.Equal("ABC123", received);
+        service.Close();
+    }
+
+    [Fact]
+    public async Task 连续两次无结尾符扫码_静默分隔为两帧()
+    {
+        using var service = new TcpScannerService();
+        var acceptTask = AcceptServerSideAsync();
+        service.Open(NewConfig());
+        await acceptTask;
+
+        var received = new List<string>();
+        var twoFrames = new ManualResetEventSlim();
+        service.BarcodeReceived += b =>
+        {
+            lock (received)
+            {
+                received.Add(b);
+                if (received.Count == 2)
+                {
+                    twoFrames.Set();
+                }
+            }
+        };
+
+        var stream = _serverSide!.GetStream();
+        byte[] first = Encoding.ASCII.GetBytes("A1");
+        stream.Write(first, 0, first.Length);
+        Thread.Sleep(500); // 模拟两次扫码之间的静默
+        byte[] second = Encoding.ASCII.GetBytes("B2");
+        stream.Write(second, 0, second.Length);
+
+        Assert.True(twoFrames.Wait(TimeSpan.FromSeconds(3)), "两次无结尾符扫码未被切成两帧");
+        lock (received)
+        {
+            Assert.Equal(["A1", "B2"], received);
+        }
+
+        service.Close();
+    }
+
+    [Fact]
+    public async Task 无前后缀模式_按静默时间分帧()
+    {
+        using var service = new TcpScannerService();
+        var acceptTask = AcceptServerSideAsync();
+        service.Open(NewConfig(ScannerFrameMode.None));
+        await acceptTask;
+
+        string? received = null;
+        var evt = new ManualResetEventSlim();
+        service.BarcodeReceived += b =>
+        {
+            received = b;
+            evt.Set();
+        };
+
+        byte[] data = Encoding.ASCII.GetBytes("6901234567890");
+        var stream = _serverSide!.GetStream();
+        stream.Write(data, 0, data.Length);
+
+        Assert.True(evt.Wait(TimeSpan.FromSeconds(3)), "无前后缀模式未按静默时间分帧");
+        Assert.Equal("6901234567890", received);
+        service.Close();
+    }
+
+    [Fact]
+    public async Task 关闭去前后缀_不可见字符原样保留()
+    {
+        using var service = new TcpScannerService();
+        var acceptTask = AcceptServerSideAsync();
+        service.Open(NewConfig(ScannerFrameMode.None, trimAffixes: false));
+        await acceptTask;
+
+        string? received = null;
+        var evt = new ManualResetEventSlim();
+        service.BarcodeReceived += b =>
+        {
+            received = b;
+            evt.Set();
+        };
+
+        byte[] payload = Encoding.ASCII.GetBytes("ABC123");
+        byte[] data = [0x02, .. payload, 0x03];
+        var stream = _serverSide!.GetStream();
+        stream.Write(data, 0, data.Length);
+
+        Assert.True(evt.Wait(TimeSpan.FromSeconds(3)), "未收到条码");
+        Assert.Equal("\u0002ABC123\u0003", received); // 关闭"去前后缀"后原样上报
         service.Close();
     }
 

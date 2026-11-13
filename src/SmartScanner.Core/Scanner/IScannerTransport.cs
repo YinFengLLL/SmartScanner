@@ -14,6 +14,9 @@ public interface IScannerTransport : IDisposable
     /// <summary>收到一条完整条码（接收线程触发）</summary>
     event Action<string>? BarcodeReceived;
 
+    /// <summary>收到扫码枪原始字节（解码前的文本块，仅用于现场排查数据通道；接收线程触发）</summary>
+    event Action<string>? RawDataReceived;
+
     /// <summary>连接状态变化（IsOpen）</summary>
     event Action<bool>? ConnectionChanged;
 

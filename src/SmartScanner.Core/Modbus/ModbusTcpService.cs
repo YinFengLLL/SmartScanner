@@ -80,6 +80,16 @@ public sealed class ModbusTcpService : IDisposable
         }
     }
 
+    /// <summary>写多个连续保持寄存器（FC16）</summary>
+    public void WriteMultipleRegisters(byte slaveId, ushort startAddress, ushort[] values)
+    {
+        lock (_sync)
+        {
+            EnsureConnected();
+            _master!.WriteMultipleRegisters(slaveId, startAddress, values);
+        }
+    }
+
     private void EnsureConnected()
     {
         if (_master is null)

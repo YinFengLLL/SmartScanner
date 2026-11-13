@@ -32,6 +32,8 @@ public sealed class ScannerConfigStoreTests : IDisposable
             OutputResultRegister = 4100,
             ScanTimeout = TimeSpan.FromSeconds(20),
             DefaultWorkerId = "0088",
+            FrameMode = ScannerFrameMode.None,
+            TrimFrameAffixes = false,
         };
 
         var store = NewStore();
@@ -49,6 +51,8 @@ public sealed class ScannerConfigStoreTests : IDisposable
         Assert.Equal(config.OutputResultRegister, loaded.OutputResultRegister);
         Assert.Equal(config.ScanTimeout, loaded.ScanTimeout);
         Assert.Equal(config.DefaultWorkerId, loaded.DefaultWorkerId);
+        Assert.Equal(config.FrameMode, loaded.FrameMode);
+        Assert.Equal(config.TrimFrameAffixes, loaded.TrimFrameAffixes);
     }
 
     [Fact]

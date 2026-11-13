@@ -31,8 +31,28 @@ public sealed class ScannerConfig
     /// <summary>输出结果寄存器：上位机写 1 = OK（已获取扫码数据）/ 2 = NG（未获取/超时）</summary>
     public ushort OutputResultRegister { get; set; } = 4100;
 
-    /// <summary>输出备用寄存器（预留，本版本不参与逻辑）</summary>
-    public ushort OutputSpareRegister { get; set; } = 4101;
+    /// <summary>条码内容寄存器（原"输出备用"）：扫码 OK 后，把条码内容按 <see cref="BarcodeWriteMode"/> 写入</summary>
+    public ushort BarcodeRegister { get; set; } = 4101;
+
+    /// <summary>条码内容写入方式（默认 INT16 单寄存器；条码数值超过 65535 时改用 INT32）</summary>
+    public BarcodeWriteMode BarcodeWriteMode { get; set; } = BarcodeWriteMode.Int16;
+
+    /// <summary>STRING 模式下占用的连续寄存器数量（每寄存器 2 个 ASCII 字符，默认 6 个 = 12 字符）</summary>
+    public ushort BarcodeStringRegisterCount { get; set; } = 6;
+
+    /// <summary>旧版配置兼容：原"输出备用寄存器"字段，读取旧 config.json 时自动映射到 <see cref="BarcodeRegister"/>（不再写出）</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ushort? OutputSpareRegister
+    {
+        get => null;
+        set
+        {
+            if (value.HasValue)
+            {
+                BarcodeRegister = value.Value;
+            }
+        }
+    }
 
     // ================= 扫码枪通讯 =================
 
@@ -44,6 +64,23 @@ public sealed class ScannerConfig
 
     /// <summary>扫码枪 TCP 目标端口（TCP 模式）</summary>
     public int ScannerPort { get; set; } = 2000;
+
+    // ================= 扫码枪数据格式（前后缀识别） =================
+
+    /// <summary>
+    /// 扫码枪返回数据的切帧方式（前后缀识别）：默认"自动识别"，
+    /// 带 CR / LF / CRLF 后缀的按后缀切帧；不带前后缀的按静默时间分帧。
+    /// </summary>
+    public ScannerFrameMode FrameMode { get; set; } = ScannerFrameMode.Auto;
+
+    /// <summary>
+    /// 静默分帧时间（毫秒）：收到数据后静默这么久仍没有结束符，就把缓冲内容当成一条条码。
+    /// 专用于"扫码枪返回信息不带前缀和后缀"的现场；有效范围 50~5000，默认 150。
+    /// </summary>
+    public int FrameIdleFlushMs { get; set; } = 150;
+
+    /// <summary>是否去掉条码前后的不可见字符（STX/ETX/空格/CR/LF 等前缀、后缀），默认开启</summary>
+    public bool TrimFrameAffixes { get; set; } = true;
 
     // ================= 工号 =================
 
